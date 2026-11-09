@@ -32,7 +32,18 @@ npm run selftest   # 纯离线算法自检（不请求任何 API）
 
 ### 关于 CORS（重要）
 
-OpenAI 与火山方舟都**不允许浏览器跨域直连**。本项目用静态边缘 rewrite（不是 serverless function）做同源转发：
+**请求一直是由用户浏览器自己发出的** —— 本项目没有后端、没有 serverless function，Key 只存在浏览器 localStorage，每次请求都从浏览器直接发出。`/proxy/*` 只是 Netlify 的**静态边缘 rewrite**（CDN 转发），不是服务端计算。
+
+CORS 是浏览器强制的安全策略，不是架构选择：当 JS 从 `xxx.netlify.app` 请求 `api.code-tab.com` 时，请求其实已经发出，但只有**目标服务器在响应里返回 `Access-Control-Allow-Origin`**，浏览器才把响应交给 JS；否则 JS 只看到 `Failed to fetch`。
+
+| 方案 | 谁能用 | 说明 |
+| --- | --- | --- |
+| **直连绝对地址** `https://api.code-tab.com/v1` | 端点**自己返回 CORS 头**时 | 最省事，不需要任何 rewrite。很多第三方中转站支持；OpenAI 官方、火山方舟通常不支持 |
+| **同源相对路径** `/proxy/codetab` | 任何情况 | 浏览器请求变成同源，由 Netlify 边缘 rewrite 转发到目标；仍是纯静态站点、仍是浏览器发起 |
+
+前端无法绕过 CORS（`mode: "no-cors"` 只能拿到 opaque 响应读不到 JSON，JSONP 也发不了带 `Authorization` 的 POST）。所以**只有端点自己开 CORS，或走同源转发**两条路。设置面板里有「测试直连是否可用」按钮（仅在你点击时发一次 `GET /models`，不做生成调用），一键判断该端点属于哪种情况。
+
+本项目用静态边缘 rewrite 做同源转发：
 
 | 同源路径（设置里填这个） | 转发目标 |
 | --- | --- |

@@ -21,7 +21,7 @@ import {
   SEEDREAM_SIZES,
 } from "../config/options";
 import { DEFAULT_SETTINGS, PROVIDER_LABELS, clearSettings } from "../config/settings";
-import { fetchModelIds } from "../services/providers";
+import { fetchModelIds, probeDirectConnection } from "../services/providers";
 
 interface Props {
   settings: Settings;
@@ -49,6 +49,8 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
   const [modelError, setModelError] = useState<string | null>(null);
   const [fetching, setFetching] = useState<ProviderId | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<{ direct: boolean; detail: string } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -185,13 +187,38 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
                   </button>
                 ))}
               </div>
-              <p className="mt-1 text-[11px] text-slate-500">
-                填同源 <code className="font-mono">/proxy/xxx</code> 相对路径；绝对 https:// 地址会被 CORS 拦截。
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                请求始终由<strong>你的浏览器</strong>直接发出（无后端、Key 只存本机）。填绝对 https:// 地址属于跨域，
+                <strong>只有当该端点自己返回 CORS 头时才可用</strong>；否则用同源 <code className="font-mono">/proxy/xxx</code>（CDN 边缘转发，仍是纯静态站点）。
               </p>
-              {/^https?:\/\//i.test(cfg.endpoint) && (
-                <p className="mt-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200">
-                  当前是跨域绝对地址，浏览器会直接 CORS 拒绝（报错 "Failed to fetch"）。
-                  除非该端点明确返回 CORS 头，否则请改用上方 /proxy/xxx 相对路径。
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={probing || !cfg.apiKey.trim() || !cfg.endpoint.trim()}
+                  onClick={async () => {
+                    setProbing(true);
+                    setProbe(null);
+                    try {
+                      const r = await probeDirectConnection(draft[draft.active]);
+                      setProbe(r);
+                    } catch (e) {
+                      setProbe({ direct: false, detail: e instanceof Error ? e.message : String(e) });
+                    } finally {
+                      setProbing(false);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-[11px] text-slate-300 hover:border-emerald-500/60 hover:text-emerald-300 disabled:opacity-50"
+                >
+                  {probing ? <RefreshCw className="h-3 w-3 animate-spin" /> : <ListPlus className="h-3 w-3" />}
+                  测试直连是否可用（GET /models）
+                </button>
+                <span className="text-[10px] text-slate-600">仅在你点击时发一次请求，不做生成调用</span>
+              </div>
+              {probe && (
+                <p className={`mt-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${
+                  probe.direct ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200" : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                }`}>
+                  {probe.detail}
                 </p>
               )}
             </div>

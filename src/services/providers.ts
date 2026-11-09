@@ -48,7 +48,7 @@ async function safeFetch(url: string, init: RequestInit): Promise<Response> {
     throw new Error(
       `无法连接端点（${raw}）。\n` +
         (absolute
-          ? `当前填的是跨域绝对地址 ${url}，浏览器会因 CORS 直接拒绝。请在设置里改用同源相对路径（如 /proxy/codetab），并在 netlify.toml 中为该域名配置 [[redirects]] 转发。`
+          ? `当前填的是跨域绝对地址 ${url}。浏览器允许发起请求，但要目标服务器返回 CORS 头才能读到响应；若该端点不支持 CORS，请改用同源相对路径（如 /proxy/codetab）并在 netlify.toml 配置 [[redirects]] 转发。可在设置里点「测试直连」确认。`
           : `同源代理路径 ${url} 未生效：请确认已重新部署 netlify.toml（含对应 [[redirects]]），或本地已重启 npm run dev 让 vite proxy 生效。`) +
         "\n也可能是 key/网络/证书问题；可在浏览器 DevTools → Network 里查看该请求是否被 CORS 拦截。"
     );
@@ -223,7 +223,7 @@ export async function generateAtlasImage(args: GenerateImageArgs): Promise<strin
   }
   if (id === "custom" && !cfg.endpoint.trim()) {
     throw new Error(
-      "自定义端点请填写同源相对路径（例如 /proxy/codetab），并在 netlify.toml 配置对应 [[redirects]]；不要填 https:// 绝对地址，否则会被 CORS 拦截。"
+      "自定义端点请填写地址：若该端点返回 CORS 头可直接填 https:// 绝对地址，否则请填同源相对路径（例如 /proxy/codetab）并在 netlify.toml 配置 [[redirects]]。设置里可用「测试直连」判断。"
     );
   }
   if (!cfg.model.trim()) {
@@ -231,6 +231,53 @@ export async function generateAtlasImage(args: GenerateImageArgs): Promise<strin
   }
   if (id === "seedream") return seedreamGenerate(cfg, args);
   return openaiGenerate(cfg, args);
+}
+
+/**
+ * User-initiated probe: can the browser call this endpoint DIRECTLY (cross-origin)?
+ * Uses a cheap GET /models — never the paid image-generation endpoint.
+ *
+ * Any HTTP response at all (even 404/401) means the browser was allowed to read
+ * it => CORS headers are present => direct absolute URL works, no rewrite needed.
+ * A thrown fetch (no response) means CORS blocked it or the host is unreachable.
+ */
+export async function probeDirectConnection(
+  cfg: ProviderConfig
+): Promise<{ direct: boolean; detail: string }> {
+  const url = join(cfg.endpoint, "models");
+  if (!/^https?:\/\//i.test(cfg.endpoint)) {
+    return {
+      direct: true,
+      detail: `当前是同源相对路径 ${cfg.endpoint}，不存在跨域问题（由 rewrite 转发）。`,
+    };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey.trim()}`,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
+    // We got a readable response -> CORS is allowed for this origin.
+    return {
+      direct: true,
+      detail: `直连可用（HTTP ${res.status}）。该端点返回了 CORS 头，浏览器能读到响应 —— 可以保留绝对地址，不需要 /proxy rewrite。`,
+    };
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    return {
+      direct: false,
+      detail:
+        `直连失败（${raw}）：浏览器没有拿到任何响应，通常是该端点未返回 CORS 头，或网络/证书问题。` +
+        `请改用同源相对路径 /proxy/xxx（并在 netlify.toml 配好 [[redirects]]），或换一个明确支持 CORS 的端点。`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** GET {endpoint}/models — returns model ids, or a friendly error. */
