@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "No /proxy/* rewrite matched this path. Add a matching [[redirects]] block in netlify.toml (proxy rules must come before the SPA fallback), then redeploy. Do NOT put a catch-all rule in public/_redirects — those rules are processed BEFORE netlify.toml and will swallow /proxy/* requests.",
+    "code": "PROXY_NOT_CONFIGURED"
+  }
+}

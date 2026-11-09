@@ -22,6 +22,24 @@
   status = 200
   force = true
 
+# Custom OpenAI-compatible relay. The browser calls /proxy/codetab/... on the
+# SAME origin, so no CORS preflight; Netlify relays it (POST body + headers).
+# Add one block like this per custom endpoint you want to use.
+[[redirects]]
+  from = "/proxy/codetab/*"
+  to = "https://api.code-tab.com/v1/:splat"
+  status = 200
+  force = true
+
+# Guard: any /proxy/* that did not match a configured rewrite above must NOT
+# fall through to the SPA (that silently returns index.html -> "Unexpected token
+# '<'" in the app). Return an explicit 404 instead. Keep this ABOVE the SPA rule.
+[[redirects]]
+  from = "/proxy/*"
+  to = "/proxy-not-configured.json"
+  status = 404
+  force = true
+
 # SPA fallback (must come last).
 [[redirects]]
   from = "/*"

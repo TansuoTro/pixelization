@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { ProviderConfig, ProviderId, Settings } from "../types";
 import {
+  ENDPOINT_PRESETS,
   OPENAI_MODEL_PRESETS,
   OPENAI_SIZES,
   SEEDREAM_MODEL_PRESETS,
@@ -164,16 +165,35 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
                 type="text"
                 value={cfg.endpoint}
                 onChange={(e) => patch(draft.active, "endpoint", e.target.value)}
-                placeholder={
-                  draft.active === "custom"
-                    ? "https://your-host/v1"
-                    : draft.active === "openai"
-                    ? "/proxy/openai 或 https://api.openai.com/v1"
-                    : "/proxy/ark 或 https://ark.cn-beijing.volces.com/api/v3"
-                }
+                placeholder="/proxy/codetab"
                 spellCheck={false}
                 className={inputCls}
               />
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {ENDPOINT_PRESETS.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => patch(draft.active, "endpoint", preset.value)}
+                    className={`rounded-lg border px-2 py-1 font-mono text-[10px] transition ${
+                      cfg.endpoint === preset.value
+                        ? "bg-emerald-500/15 border-emerald-500 text-emerald-300"
+                        : "bg-slate-950/60 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300"
+                    }`}
+                  >
+                    {preset.value}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-slate-500">
+                填同源 <code className="font-mono">/proxy/xxx</code> 相对路径；绝对 https:// 地址会被 CORS 拦截。
+              </p>
+              {/^https?:\/\//i.test(cfg.endpoint) && (
+                <p className="mt-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200">
+                  当前是跨域绝对地址，浏览器会直接 CORS 拒绝（报错 "Failed to fetch"）。
+                  除非该端点明确返回 CORS 头，否则请改用上方 /proxy/xxx 相对路径。
+                </p>
+              )}
             </div>
             <div>
               <label className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">

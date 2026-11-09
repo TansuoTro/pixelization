@@ -20,6 +20,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/proxy\/openai/, "/v1"),
       },
+      "/proxy/codetab": {
+        target: "https://api.code-tab.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/proxy\/codetab/, "/v1"),
+      },
     },
   },
 });

@@ -1,4 +1,8 @@
-# netlify.toml is authoritative for this project (it defines the /proxy/*
-# rewrites AND the SPA fallback). This file keeps a minimal SPA fallback for
-# static hosts that only understand _redirects.
-/*  /index.html  200
+# Intentionally EMPTY of rules.
+#
+# All redirects (the /proxy/* same-origin rewrites AND the SPA fallback) live in
+# netlify.toml only. Keeping a catch-all "/*  /index.html  200" here is risky:
+# Netlify merges rules from netlify.toml and from _redirects in the publish
+# directory, and a catch-all in this file can match /proxy/* BEFORE the proxy
+# rewrites, returning the HTML app shell instead of JSON -> "Unexpected token '<'".
+# Do not add redirect rules here; edit netlify.toml (proxy rules first, SPA last).

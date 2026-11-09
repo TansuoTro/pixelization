@@ -26,7 +26,9 @@ export const DEFAULT_SETTINGS: Settings = {
     watermark: false,
   },
   custom: {
-    endpoint: "",
+    // Same-origin proxy path defined in netlify.toml / vite.config.ts. Filling
+    // an absolute https:// URL here causes browser CORS -> "Failed to fetch".
+    endpoint: "/proxy/codetab",
     apiKey: "",
     model: "",
     size: "1024x1024",

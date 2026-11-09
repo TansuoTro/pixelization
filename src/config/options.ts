@@ -129,3 +129,16 @@ export const SEEDREAM_MODEL_PRESETS = [
 
 export const OPENAI_SIZES = ["1024x1024", "1536x1024", "1024x1536", "auto"];
 export const SEEDREAM_SIZES = ["1K", "2K", "4K", "2048x2048", "1024x1024"];
+
+/**
+ * Same-origin rewrite paths. Do NOT put https:// URLs in the endpoint field:
+ * the browser would call them cross-origin and CORS would reject the request
+ * with a bare "Failed to fetch" (no status code at all).
+ * Each entry must have a matching [[redirects]] block in netlify.toml and a
+ * matching dev proxy in vite.config.ts.
+ */
+export const ENDPOINT_PRESETS: { label: string; value: string }[] = [
+  { label: "OpenAI 官方（/proxy/openai）", value: "/proxy/openai" },
+  { label: "SeeDream 方舟（/proxy/ark）", value: "/proxy/ark" },
+  { label: "code-tab.com（/proxy/codetab）", value: "/proxy/codetab" },
+];

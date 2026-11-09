@@ -38,6 +38,41 @@ OpenAI 与火山方舟都**不允许浏览器跨域直连**。本项目用静态
 | --- | --- |
 | `/proxy/openai` → 请求 `/proxy/openai/images/generations` | `https://api.openai.com/v1/images/generations` |
 | `/proxy/ark` → 请求 `/proxy/ark/images/generations` | `https://ark.cn-beijing.volces.com/api/v3/images/generations` |
+| `/proxy/codetab` → 请求 `/proxy/codetab/images/generations` | `https://api.code-tab.com/v1/images/generations` |
+
+**加自己的中转端点**（例如 `https://api.code-tab.com`）：照下面格式在 `netlify.toml` 加一条，然后在设置里把地址填成对应的 `/proxy/xxx` 相对路径：
+
+```toml
+[[redirects]]
+  from = "/proxy/codetab/*"
+  to = "https://api.code-tab.com/v1/:splat"
+  status = 200
+  force = true
+```
+
+本地开发还要在 `vite.config.ts` 的 `server.proxy` 里加等价的一条，否则 `npm run dev` 时代理不生效。
+
+### ⚠️ `_redirects` 与 `netlify.toml` 的顺序陷阱（最常见的坑）
+
+Netlify 官方规则：**`_redirects` 里的规则永远先于 `netlify.toml` 里的规则处理**。所以 `public/_redirects` 里如果存在 `/*  /index.html  200` 这种兜底，它会**抢在 `/proxy/*` 转发之前**命中，把 API 请求变成 HTML 首页 —— 表现就是：
+
+```
+Unexpected token '<', "<!doctype ..." is not valid JSON
+```
+
+本项目因此**只在 `netlify.toml` 里放重定向规则**，`public/_redirects` 保持无规则（仅注释）。另外加了一条 `/proxy/*` → 404 JSON 的守卫：任何没匹配到转发的代理路径会返回一条明确的 JSON 错误信息，而不是悄悄回落到首页。
+
+> 改完 `netlify.toml` 必须**重新部署**才生效；本地改完 `vite.config.ts` 必须**重启 `npm run dev`**。
+
+### `Failed to fetch` 排查
+
+这个报错是浏览器**网络层就失败**（没有 HTTP 状态码），几乎总是 CORS，不是 key 或模型名错误。按顺序检查：
+
+1. **设置里的端点是不是填了绝对 `https://` 地址？** 页面在 `xxx.netlify.app`，直连 `api.code-tab.com` 属于跨域，浏览器会拒绝并报 `Failed to fetch`。改成同源相对路径 `/proxy/codetab`（设置面板里有快捷按钮，填绝对地址时会给出黄色警告）。
+2. **`netlify.toml` 的改动是否真的部署了？** rewrite 只在部署后生效；改完要重新部署。本地则必须**重启** `npm run dev` 让 vite proxy 重新加载配置。
+3. **路径是否对得上？** `from = "/proxy/codetab/*"` 且 `force = true`，SPA fallback `/*` 必须放在最后一条。
+4. DevTools → Network 看该请求：若显示 `(blocked: CORS)` / 无响应，就是第 1 或第 2 条；若有 4xx/5xx 状态码，则已经打通，是 key / model / 参数问题。
+5. 应用现在会把裸的 `Failed to fetch` 翻译成具体的诊断文字并显示出来。
 
 `vite.config.ts` 里配了等价的 dev proxy，所以本地 `npm run dev` 也能用。浏览器仍然自己发 `Authorization` 头，Key 不经过构建、不落到日志。
 
