@@ -38,6 +38,20 @@ export type SheetStyle =
 
 export type ProviderId = "openai" | "seedream" | "custom";
 
+/**
+ * Explicit connection OPTION. This is a real setting, not inferred from the
+ * endpoint string:
+ *  - "proxy"  -> same-origin /proxy/* path, relayed by a Netlify rewrite
+ *  - "direct" -> absolute https:// URL called straight from the browser
+ *                (only works when that endpoint returns CORS headers)
+ */
+export type ConnectionMode = "proxy" | "direct";
+
+export const CONNECTION_MODE_LABELS: Record<ConnectionMode, string> = {
+  proxy: "同源代理 /proxy/*",
+  direct: "直连绝对地址 https://",
+};
+
 export interface ProcessParams {
   grid_rows: number;
   grid_cols: number;
@@ -100,7 +114,14 @@ export interface GenerateResult {
 }
 
 export interface ProviderConfig {
+  /** Which OPTION is active. Drives the default/quick-fill endpoint value. */
+  mode: ConnectionMode;
+  /** The endpoint actually used for requests (freely editable). */
   endpoint: string;
+  /** Absolute https:// endpoint used when mode === "direct". */
+  directEndpoint: string;
+  /** Same-origin /proxy/* path used when mode === "proxy". */
+  proxyEndpoint: string;
   apiKey: string;
   model: string;
   size: string;

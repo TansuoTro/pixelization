@@ -75,6 +75,20 @@ Unexpected token '<', "<!doctype ..." is not valid JSON
 
 > 改完 `netlify.toml` 必须**重新部署**才生效；本地改完 `vite.config.ts` 必须**重启 `npm run dev`**。
 
+### ⚠️ `HTTP 504`：Netlify 代理 26 秒硬超时
+
+**症状**：`/models` 能拉到列表，但点「生成图集」等很久后返回 `HTTP 504`。
+
+**原因**：Netlify 的 `status = 200` rewrite/proxy 有 **26 秒硬超时，且不可配置**（官方支持论坛原话 "That timeout cannot be changed"）。`GET /models` 很快所以能通；`POST /images/generations` 通常要 30 秒~几分钟，必然被网关掐断。这**不是** key、model 或参数问题，调 `/proxy/*` 怎么改都没用。
+
+**解决**：在「设置 → 连接模式（OPTION）」里切到 **【直连绝对地址 https://】**，例如 `https://api.code-tab.com/v1`。这样浏览器直接请求端点，**不经过 Netlify 边缘，没有 26 秒限制**。前提是该端点返回 CORS 头 —— 用设置里的「测试直连是否可用」按钮（`GET /models`）确认。
+
+设置里两种模式各有独立地址并分别保存：
+- **同源代理 `/proxy/*`**：不需要端点支持 CORS，但受 26 秒限制，只适合轻量接口
+- **直连绝对地址 `https://`**：无超时限制，需要端点支持 CORS
+
+应用现在遇到 504/502/408 会直接给出上述诊断。
+
 ### `Failed to fetch` 排查
 
 这个报错是浏览器**网络层就失败**（没有 HTTP 状态码），几乎总是 CORS，不是 key 或模型名错误。按顺序检查：

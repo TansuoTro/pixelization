@@ -375,7 +375,7 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
           <div className="space-y-4">
             <div className={`rounded-lg border px-3 py-2 text-[11px] ${ready ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-300" : "border-amber-500/40 bg-amber-500/5 text-amber-200"}`}>
               {ready
-                ? `已配置 · ${PROVIDER_LABELS[settings.active]} · ${settings[settings.active].model || "未填 model"}`
+                ? `已配置 · ${PROVIDER_LABELS[settings.active]} · ${settings[settings.active].model || "未填 model"} · ${settings[settings.active].mode === "direct" ? "直连" : "代理"}`
                 : "未配置 API Key — 点右上角「设置」填写（也可先载入已有图集离线体验）"}
             </div>
 

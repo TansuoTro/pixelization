@@ -137,8 +137,15 @@ export const SEEDREAM_SIZES = ["1K", "2K", "4K", "2048x2048", "1024x1024"];
  * Each entry must have a matching [[redirects]] block in netlify.toml and a
  * matching dev proxy in vite.config.ts.
  */
-export const ENDPOINT_PRESETS: { label: string; value: string }[] = [
+export const PROXY_ENDPOINT_PRESETS: { label: string; value: string }[] = [
   { label: "OpenAI 官方（/proxy/openai）", value: "/proxy/openai" },
   { label: "SeeDream 方舟（/proxy/ark）", value: "/proxy/ark" },
   { label: "code-tab.com（/proxy/codetab）", value: "/proxy/codetab" },
+];
+
+/** Quick-fill values for the DIRECT (absolute https://) OPTION. */
+export const DIRECT_ENDPOINT_PRESETS: { label: string; value: string }[] = [
+  { label: "code-tab.com", value: "https://api.code-tab.com/v1" },
+  { label: "OpenAI 官方", value: "https://api.openai.com/v1" },
+  { label: "火山方舟", value: "https://ark.cn-beijing.volces.com/api/v3" },
 ];

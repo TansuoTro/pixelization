@@ -10,7 +10,7 @@
  *    https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh
  */
 import type { ProviderConfig, ProviderId, Settings } from "../types";
-import { PROVIDER_LABELS } from "../config/settings";
+import { PROVIDER_LABELS, effectiveEndpoint } from "../config/settings";
 import { base64ToBytes, bytesToBase64, fileToBase64 } from "../core/image";
 
 export interface GenerateImageArgs {
@@ -68,8 +68,23 @@ const HTML_DIAGNOSIS =
   "排查：① netlify.toml 里对应的 [[redirects]] 是否已重新部署；② 本地是否重启过 npm run dev 让 vite proxy 生效；" +
   "③ 该端点是否真的提供这个接口（很多中转站不提供 GET /models，直接手填模型名即可）；④ DevTools → Network 看这条请求的真实 URL 与状态码。";
 
+/**
+ * Netlify rewrite/proxy has a HARD 26s timeout that cannot be configured.
+ * A fast GET /models succeeds; a 30s–minutes image generation always 504s.
+ * Only a direct absolute-URL call (bypassing Netlify edge) avoids it.
+ */
+const PROXY_TIMEOUT_DIAGNOSIS =
+  "HTTP 504/502 = Netlify 边缘代理超时。Netlify 的 rewrite/proxy 有 **26 秒硬超时且不可调**，" +
+  "GET /models 很快所以能通，但图片生成通常要 30 秒~几分钟，必然被网关掐断。" +
+  "这不是 key / 模型 / 参数问题，改用 /proxy/* 怎么调都没用。" +
+  "解决：在「设置 → 连接模式」里切到【直连绝对地址 https://】，让浏览器直接请求端点（不过 Netlify 边缘，没有 26s 限制）；" +
+  "前提是端点返回 CORS 头，可用「测试直连」按钮确认。";
+
 /** Read the body ONCE, then give a useful message whether it is JSON or HTML. */
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response, endpoint = ""): Promise<string> {
+  if ((res.status === 504 || res.status === 502 || res.status === 408) && !/^https?:\/\//i.test(endpoint)) {
+    return `HTTP ${res.status}：${PROXY_TIMEOUT_DIAGNOSIS}`;
+  }
   let text = "";
   let contentType = "";
   try {
@@ -153,6 +168,7 @@ function pngBlobFromBase64(b64: string): Blob {
 
 async function openaiGenerate(cfg: ProviderConfig, args: GenerateImageArgs): Promise<string> {
   const { prompt, referenceB64 } = args;
+  const base = effectiveEndpoint(cfg);
   let res: Response;
 
   if (referenceB64) {
@@ -163,7 +179,7 @@ async function openaiGenerate(cfg: ProviderConfig, args: GenerateImageArgs): Pro
     form.append("size", cfg.size || "1024x1024");
     form.append("n", "1");
     form.append("image", pngBlobFromBase64(referenceB64), "reference.png");
-    res = await safeFetch(join(cfg.endpoint, "images/edits"), {
+    res = await safeFetch(join(base, "images/edits"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.apiKey.trim()}`,
@@ -180,19 +196,20 @@ async function openaiGenerate(cfg: ProviderConfig, args: GenerateImageArgs): Pro
     };
     // gpt-image-* natively returns b64_json; dall-e-3 needs response_format.
     if (!/^gpt-image/i.test(cfg.model)) payload.response_format = "b64_json";
-    res = await safeFetch(join(cfg.endpoint, "images/generations"), {
+    res = await safeFetch(join(base, "images/generations"), {
       method: "POST",
       headers: authHeaders(cfg.apiKey),
       body: JSON.stringify(payload),
     });
   }
 
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw new Error(await readError(res, base));
   return extractImage(await readJson(res, "生成图片"));
 }
 
 async function seedreamGenerate(cfg: ProviderConfig, args: GenerateImageArgs): Promise<string> {
   const { prompt, referenceB64 } = args;
+  const base = effectiveEndpoint(cfg);
   const payload: Record<string, unknown> = {
     model: cfg.model.trim(),
     prompt,
@@ -205,12 +222,12 @@ async function seedreamGenerate(cfg: ProviderConfig, args: GenerateImageArgs): P
   // Ark accepts either a URL or a data URL for the reference image.
   if (referenceB64) payload.image = `data:image/png;base64,${referenceB64}`;
 
-  const res = await safeFetch(join(cfg.endpoint, "images/generations"), {
+  const res = await safeFetch(join(base, "images/generations"), {
     method: "POST",
     headers: authHeaders(cfg.apiKey),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw new Error(await readError(res, base));
   return extractImage(await readJson(res, "生成图片"));
 }
 
@@ -221,9 +238,9 @@ export async function generateAtlasImage(args: GenerateImageArgs): Promise<strin
   if (!cfg.apiKey.trim()) {
     throw new Error(`请先在「设置」里填写 ${PROVIDER_LABELS[id]} 的 API Key（sk）。`);
   }
-  if (id === "custom" && !cfg.endpoint.trim()) {
+  if (id === "custom" && !effectiveEndpoint(cfg).trim()) {
     throw new Error(
-      "自定义端点请填写地址：若该端点返回 CORS 头可直接填 https:// 绝对地址，否则请填同源相对路径（例如 /proxy/codetab）并在 netlify.toml 配置 [[redirects]]。设置里可用「测试直连」判断。"
+      "自定义端点请在「设置 → 连接模式」里选择并填写地址：直连填 https:// 绝对地址，或代理填同源 /proxy/*（需在 netlify.toml 配 [[redirects]]）。"
     );
   }
   if (!cfg.model.trim()) {
@@ -244,13 +261,16 @@ export async function generateAtlasImage(args: GenerateImageArgs): Promise<strin
 export async function probeDirectConnection(
   cfg: ProviderConfig
 ): Promise<{ direct: boolean; detail: string }> {
-  const url = join(cfg.endpoint, "models");
-  if (!/^https?:\/\//i.test(cfg.endpoint)) {
+  // Always probe the ABSOLUTE endpoint: the question is "can I switch to direct
+  // mode", independent of the currently selected mode.
+  const direct = cfg.directEndpoint;
+  if (!/^https?:\/\//i.test(direct)) {
     return {
-      direct: true,
-      detail: `当前是同源相对路径 ${cfg.endpoint}，不存在跨域问题（由 rewrite 转发）。`,
+      direct: false,
+      detail: "请先在「设置 → 连接模式 → 直连绝对地址」里填写 https:// 端点地址。",
     };
   }
+  const url = join(direct, "models");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -283,8 +303,9 @@ export async function probeDirectConnection(
 /** GET {endpoint}/models — returns model ids, or a friendly error. */
 export async function fetchModelIds(cfg: ProviderConfig): Promise<string[]> {
   if (!cfg.apiKey.trim()) throw new Error("请先填写 API Key 再拉取模型列表。");
-  if (!cfg.endpoint.trim()) throw new Error("请先填写端点地址。");
-  const res = await safeFetch(join(cfg.endpoint, "models"), {
+  const base = effectiveEndpoint(cfg);
+  if (!base.trim()) throw new Error("请先在设置里填写端点地址。");
+  const res = await safeFetch(join(base, "models"), {
     method: "GET",
     headers: {
       Authorization: `Bearer ${cfg.apiKey.trim()}`,
@@ -293,7 +314,7 @@ export async function fetchModelIds(cfg: ProviderConfig): Promise<string[]> {
   });
   if (!res.ok) {
     throw new Error(
-      `${await readError(res)}。部分中转/网关不开放 /models 接口，直接在模型名输入框里手填即可。`
+      `${await readError(res, base)}。部分中转/网关不开放 /models 接口，直接在模型名输入框里手填即可。`
     );
   }
   const body = (await readJson(res, "拉取模型列表 GET /models")) as {

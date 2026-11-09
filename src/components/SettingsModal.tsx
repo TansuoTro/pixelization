@@ -12,15 +12,17 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import type { ProviderConfig, ProviderId, Settings } from "../types";
+import type { ConnectionMode, ProviderConfig, ProviderId, Settings } from "../types";
+import { CONNECTION_MODE_LABELS } from "../types";
 import {
-  ENDPOINT_PRESETS,
+  DIRECT_ENDPOINT_PRESETS,
   OPENAI_MODEL_PRESETS,
   OPENAI_SIZES,
+  PROXY_ENDPOINT_PRESETS,
   SEEDREAM_MODEL_PRESETS,
   SEEDREAM_SIZES,
 } from "../config/options";
-import { DEFAULT_SETTINGS, PROVIDER_LABELS, clearSettings } from "../config/settings";
+import { DEFAULT_SETTINGS, PROVIDER_LABELS, clearSettings, effectiveEndpoint } from "../config/settings";
 import { fetchModelIds, probeDirectConnection } from "../services/providers";
 
 interface Props {
@@ -65,6 +67,37 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
       ...prev,
       [id]: { ...prev[id], [field]: value },
     }));
+  };
+
+  /**
+   * Switch the connection OPTION. Each mode keeps its OWN endpoint value, so
+   * toggling back and forth never loses what the user typed.
+   */
+  const setMode = (id: ProviderId, mode: ConnectionMode) => {
+    setDraft((prev) => {
+      const c = prev[id];
+      return {
+        ...prev,
+        [id]: {
+          ...c,
+          mode,
+          endpoint: mode === "direct" ? c.directEndpoint : c.proxyEndpoint,
+        },
+      };
+    });
+    setProbe(null);
+  };
+
+  /** Edit the endpoint for the CURRENTLY selected mode only. */
+  const patchEndpoint = (id: ProviderId, value: string) => {
+    setDraft((prev) => {
+      const c = prev[id];
+      const field = c.mode === "direct" ? "directEndpoint" : "proxyEndpoint";
+      return {
+        ...prev,
+        [id]: { ...c, [field]: value, endpoint: value },
+      };
+    });
   };
 
   const handleFetchModels = async (id: ProviderId) => {
@@ -157,28 +190,70 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
             </p>
           </div>
 
+          {/* Connection MODE — explicit OPTION */}
+          <div className="rounded-xl border border-slate-700 bg-slate-950/50 p-3 space-y-2.5">
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+              <Server className="w-3.5 h-3.5 text-emerald-400" /> 连接模式（OPTION）
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["proxy", "direct"] as ConnectionMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setMode(draft.active, mode)}
+                  className={`rounded-lg border px-3 py-2.5 text-left text-xs transition ${
+                    cfg.mode === mode
+                      ? "bg-emerald-500/15 border-emerald-500 text-emerald-200"
+                      : "bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                  }`}
+                >
+                  <span className="block font-semibold">{CONNECTION_MODE_LABELS[mode]}</span>
+                  <span className="mt-0.5 block font-mono text-[10px] opacity-80">
+                    {mode === "proxy" ? "/proxy/* rewrite" : "https:// 直连"}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {cfg.mode === "proxy" && (
+              <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200">
+                <strong>注意 26 秒硬超时：</strong>Netlify rewrite/proxy 超时固定 26 秒且不可调。
+                <code className="font-mono">GET /models</code> 快所以能通，但
+                <code className="font-mono">POST /images/generations</code> 要几十秒~几分钟，必然返回
+                <strong> HTTP 504</strong>。若你遇到 504，请切到右侧【直连绝对地址】。
+              </p>
+            )}
+            {cfg.mode === "direct" && (
+              <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-emerald-200">
+                浏览器直连端点，<strong>不过 Netlify 边缘、没有 26 秒限制</strong>。
+                前提是端点自己返回 CORS 头 —— 用下方「测试直连」确认。生成耗时长也不会被掐断。
+              </p>
+            )}
+          </div>
+
           {/* Endpoint + size */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                <Server className="w-3.5 h-3.5" /> 端点地址
+                <Server className="w-3.5 h-3.5" />
+                {cfg.mode === "direct" ? "直连绝对地址" : "同源代理路径"}
               </label>
               <input
                 type="text"
-                value={cfg.endpoint}
-                onChange={(e) => patch(draft.active, "endpoint", e.target.value)}
-                placeholder="/proxy/codetab"
+                value={effectiveEndpoint(cfg)}
+                onChange={(e) => patchEndpoint(draft.active, e.target.value)}
+                placeholder={cfg.mode === "direct" ? "https://api.code-tab.com/v1" : "/proxy/codetab"}
                 spellCheck={false}
                 className={inputCls}
               />
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {ENDPOINT_PRESETS.map((preset) => (
+                {(cfg.mode === "direct" ? DIRECT_ENDPOINT_PRESETS : PROXY_ENDPOINT_PRESETS).map((preset) => (
                   <button
                     key={preset.value}
                     type="button"
-                    onClick={() => patch(draft.active, "endpoint", preset.value)}
+                    onClick={() => patchEndpoint(draft.active, preset.value)}
                     className={`rounded-lg border px-2 py-1 font-mono text-[10px] transition ${
-                      cfg.endpoint === preset.value
+                      effectiveEndpoint(cfg) === preset.value
                         ? "bg-emerald-500/15 border-emerald-500 text-emerald-300"
                         : "bg-slate-950/60 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300"
                     }`}
@@ -188,13 +263,13 @@ export const SettingsModal: React.FC<Props> = ({ settings, onSave, onClose }) =>
                 ))}
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                请求始终由<strong>你的浏览器</strong>直接发出（无后端、Key 只存本机）。填绝对 https:// 地址属于跨域，
-                <strong>只有当该端点自己返回 CORS 头时才可用</strong>；否则用同源 <code className="font-mono">/proxy/xxx</code>（CDN 边缘转发，仍是纯静态站点）。
+                两种模式各自保存自己的地址，来回切换不会丢。请求始终由
+                <strong>你的浏览器</strong>直接发出（无后端、Key 只存本机）。
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  disabled={probing || !cfg.apiKey.trim() || !cfg.endpoint.trim()}
+                  disabled={probing || !cfg.apiKey.trim() || !cfg.directEndpoint.trim()}
                   onClick={async () => {
                     setProbing(true);
                     setProbe(null);
