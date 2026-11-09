@@ -1,4 +1,4 @@
-"""OpenAI Image Generation Provider (gpt-image-1 / dall-e-3)."""
+"""OpenAI GPT Image 2 provider (OpenAI Images API / OpenAI-compatible relays)."""
 
 from __future__ import annotations
 
@@ -13,8 +13,13 @@ from app.pixel_pipeline import image_to_png_bytes
 from app.providers.base import BaseImageProvider
 from app.schemas import ProviderId, TextureMode
 
-OPENAI_GENERATIONS_URL = "https://api.openai.com/v1/images/generations"
-OPENAI_EDITS_URL = "https://api.openai.com/v1/images/edits"
+_OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+
+def _openai_urls(settings) -> tuple[str, str]:
+    """Resolve the generations/edits endpoints from the (possibly custom) base URL."""
+    base = (settings.openai_base_url or _OPENAI_DEFAULT_BASE_URL).rstrip("/")
+    return f"{base}/images/generations", f"{base}/images/edits"
 
 
 def _extract_openai_error(resp: httpx.Response) -> str:
@@ -29,12 +34,29 @@ def _extract_openai_error(resp: httpx.Response) -> str:
     return f"HTTP {resp.status_code}: {resp.text[:400]}"
 
 
+async def _decode_image_item(client: httpx.AsyncClient, item: dict) -> Image.Image:
+    """GPT Image 2 may return base64 inline or a short-lived URL."""
+    if item.get("b64_json"):
+        raw = base64.b64decode(item["b64_json"])
+        return Image.open(io.BytesIO(raw)).convert("RGBA")
+    if item.get("url"):
+        resp = await client.get(item["url"])
+        resp.raise_for_status()
+        return Image.open(io.BytesIO(resp.content)).convert("RGBA")
+    raise RuntimeError(
+        "GPT Image 2 response contained neither 'b64_json' nor 'url' image data."
+    )
+
+
 class OpenAIProvider(BaseImageProvider):
-    """Generates textures via the OpenAI Images API (supports txt2img and img2img edits)."""
+    """Generates textures via OpenAI GPT Image 2 (txt2img and img2img edits)."""
 
     provider_id: ProviderId = "openai"
-    name = "OpenAI (gpt-image-1 / DALL-E 3)"
-    description = "Cloud inference via OpenAI Images API (requires OPENAI_API_KEY)."
+    name = "OpenAI GPT Image 2"
+    description = (
+        "OpenAI GPT Image 2 via the Images API (OPENAI_API_KEY, optionally "
+        "OPENAI_BASE_URL for an OpenAI-compatible relay)."
+    )
     supports_img2img = True
 
     def is_configured(self) -> bool:
@@ -51,50 +73,42 @@ class OpenAIProvider(BaseImageProvider):
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured in environment.")
 
+        generations_url, edits_url = _openai_urls(settings)
         headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+        size = settings.openai_image_size
         _ = (mode, strength)
 
-        async with httpx.AsyncClient(timeout=65.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             if reference_image is not None:
-                png_bytes = image_to_png_bytes(reference_image.convert("RGBA").resize((1024, 1024)))
+                png_bytes = image_to_png_bytes(
+                    reference_image.convert("RGBA").resize((1024, 1024))
+                )
                 files = {"image": ("reference.png", png_bytes, "image/png")}
                 data = {
                     "model": settings.openai_model,
                     "prompt": wrapped_prompt,
-                    "size": "1024x1024",
+                    "size": size,
+                    "n": 1,
                 }
-                response = await client.post(OPENAI_EDITS_URL, headers=headers, data=data, files=files)
-                if response.status_code != 200:
-                    raise RuntimeError(_extract_openai_error(response))
-                body = response.json()
+                response = await client.post(
+                    edits_url, headers=headers, data=data, files=files
+                )
             else:
-                models_to_try = [settings.openai_model]
-                if "dall-e-3" not in models_to_try:
-                    models_to_try.append("dall-e-3")
+                payload: dict[str, object] = {
+                    "model": settings.openai_model,
+                    "prompt": wrapped_prompt,
+                    "size": size,
+                    "n": 1,
+                }
+                response = await client.post(
+                    generations_url, headers=headers, json=payload
+                )
 
-                errors: list[str] = []
-                body = None
-                for model_name in models_to_try:
-                    payload: dict[str, object] = {
-                        "model": model_name,
-                        "prompt": wrapped_prompt,
-                        "size": "1024x1024",
-                        "n": 1,
-                    }
-                    if model_name != "gpt-image-1":
-                        payload["response_format"] = "b64_json"
-                    response = await client.post(OPENAI_GENERATIONS_URL, headers=headers, json=payload)
-                    if response.status_code == 200:
-                        body = response.json()
-                        break
-                    errors.append(f"[{model_name}] {_extract_openai_error(response)}")
+            if response.status_code != 200:
+                raise RuntimeError(_extract_openai_error(response))
 
-                if body is None:
-                    raise RuntimeError(" | ".join(errors))
-
-        item = body["data"][0]
-        if "b64_json" in item and item["b64_json"]:
-            raw_bytes = base64.b64decode(item["b64_json"])
-            return Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
-
-        raise RuntimeError("OpenAI response did not include base64 image data.")
+            body = response.json()
+            data_items = body.get("data") or []
+            if not data_items:
+                raise RuntimeError("GPT Image 2 returned an empty data list.")
+            return await _decode_image_item(client, data_items[0])

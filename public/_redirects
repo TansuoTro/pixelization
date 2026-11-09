@@ -1,0 +1,4 @@
+# netlify.toml is authoritative for this project (it defines the /proxy/*
+# rewrites AND the SPA fallback). This file keeps a minimal SPA fallback for
+# static hosts that only understand _redirects.
+/*  /index.html  200

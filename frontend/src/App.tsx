@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Cuboid, RefreshCw, Sparkles } from "lucide-react";
+import { AlertCircle, Cuboid, LayoutGrid, RefreshCw, Sparkles } from "lucide-react";
 import { ControlPanel } from "./components/ControlPanel";
 import { DualPreview } from "./components/DualPreview";
 import { PixelCanvasEditor } from "./components/PixelCanvasEditor";
+import { SheetStudio } from "./components/SheetStudio";
 import { TilePreview3x3 } from "./components/TilePreview3x3";
 import {
   fetchProviders,
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
   const [liveCanvasDataUrl, setLiveCanvasDataUrl] = useState<string>("");
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [studioMode, setStudioMode] = useState<"sheet" | "single">("sheet");
 
   // Load providers on startup
   useEffect(() => {
@@ -64,6 +66,7 @@ export const App: React.FC = () => {
   // Support global Ctrl+V / Cmd+V image paste anywhere on the page
   useEffect(() => {
     const handleGlobalPaste = (e: ClipboardEvent) => {
+      if (studioMode === "sheet") return;
       const items = e.clipboardData?.items;
       if (!items) return;
       for (let i = 0; i < items.length; i += 1) {
@@ -91,7 +94,7 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener("paste", handleGlobalPaste);
     };
-  }, [handleReferenceImageChange]);
+  }, [handleReferenceImageChange, studioMode]);
 
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true);
@@ -259,8 +262,34 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-950/60 p-1">
+              <button
+                type="button"
+                onClick={() => setStudioMode("sheet")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  studioMode === "sheet"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                Sprite Sheet Studio
+              </button>
+              <button
+                type="button"
+                onClick={() => setStudioMode("single")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  studioMode === "single"
+                    ? "bg-emerald-500/15 text-emerald-300"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Cuboid className="w-3.5 h-3.5" />
+                Single Texture
+              </button>
+            </div>
             <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-mono">
-              {provider}
+              {studioMode === "sheet" ? "GPT Image 2" : provider}
             </span>
           </div>
         </div>
@@ -287,6 +316,7 @@ export const App: React.FC = () => {
           </div>
         )}
 
+        {studioMode === "single" ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Generation Controls */}
           <div className="lg:col-span-4">
@@ -371,6 +401,9 @@ export const App: React.FC = () => {
             )}
           </div>
         </div>
+        ) : (
+          <SheetStudio />
+        )}
       </main>
     </div>
   );

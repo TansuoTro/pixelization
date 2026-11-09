@@ -23,11 +23,30 @@ from app.pixel_pipeline import (
     wrap_prompt,
 )
 from app.providers.registry import get_provider, list_providers
+from app.sheet_pipeline import (
+    RESAMPLE_LABELS,
+    build_sheet_zip,
+    process_sheet,
+)
+from app.sheet_prompts import (
+    DEFAULT_ITEMS,
+    GTCEU_STEEL_ITEMS,
+    STYLE_PRESETS,
+    build_reference_guidance,
+    build_sheet_prompt,
+)
 from app.schemas import (
+    BuildSheetPromptRequest,
+    BuildSheetPromptResponse,
     GenerateResponse,
     ProviderId,
     ProvidersResponse,
     ReprocessRequest,
+    SheetGenerateRequest,
+    SheetGenerateResponse,
+    SheetProcessRequest,
+    SheetProcessResponse,
+    SheetZipRequest,
     TargetSize,
     TextureMode,
 )
@@ -80,8 +99,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "Accept"],
 )
 
-# Simple sliding-window rate limiter per client IP
+# Simple sliding-window rate limiter per client IP.  Only the TWO endpoints that
+# actually spend money on AI inference are limited; reprocessing an already
+# generated atlas must stay free and responsive for real-time parameter tweaking.
 _REQUEST_TIMESTAMPS: dict[str, deque[float]] = defaultdict(deque)
+_RATE_LIMITED_PATHS = {"/api/generate", "/api/generate_sheet"}
 
 
 @app.middleware("http")
@@ -93,19 +115,20 @@ async def security_headers_and_rate_limit_middleware(request: Request, call_next
             content={"detail": "HTTP method not allowed."},
         )
 
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    now = time.monotonic()
-    bucket = _REQUEST_TIMESTAMPS[client_ip]
-    while bucket and (now - bucket[0]) > 60.0:
-        bucket.popleft()
+    if request.url.path in _RATE_LIMITED_PATHS:
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        now = time.monotonic()
+        bucket = _REQUEST_TIMESTAMPS[client_ip]
+        while bucket and (now - bucket[0]) > 60.0:
+            bucket.popleft()
 
-    limit = get_settings().rate_limit_per_minute
-    if len(bucket) >= limit:
-        return JSONResponse(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"detail": "Rate limit exceeded. Please wait before generating more textures."},
-        )
-    bucket.append(now)
+        limit = get_settings().rate_limit_per_minute
+        if len(bucket) >= limit:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Rate limit exceeded. Please wait before generating more textures."},
+            )
+        bucket.append(now)
 
     response: Response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -317,5 +340,250 @@ async def reprocess_existing_image(payload: ReprocessRequest) -> GenerateRespons
         provider="mock",
         palette_colors=payload.palette_colors,
         palette=extract_hex_palette(processed),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Sprite-sheet / atlas batch studio
+# --------------------------------------------------------------------------- #
+
+
+def _normalize_items(items: list[str], rows: int, cols: int) -> list[str]:
+    """Keep the item list exactly the size of the grid."""
+    cleaned = [str(i).strip() for i in items if str(i).strip()] or list(DEFAULT_ITEMS)
+    n = rows * cols
+    return (cleaned[:n] + [f"Item {k + 1}" for k in range(n)])[:n]
+
+
+def _decode_reference_image(b64: str | None):
+    """Validate + decode an optional base64 reference image for img2img."""
+    if not b64 or not b64.strip():
+        return None
+    cleaned = b64.strip()
+    if "," in cleaned and cleaned.startswith("data:"):
+        cleaned = cleaned.split(",", 1)[1]
+
+    # Cap the payload before decoding (base64 is ~4/3 of the decoded bytes).
+    max_b64_len = int(get_settings().max_upload_bytes * 4 / 3) + 4096
+    if len(cleaned) > max_b64_len:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Reference image exceeds the maximum upload size.",
+        )
+    try:
+        return base64_to_image(cleaned)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid reference image: {exc}",
+        ) from exc
+
+
+@app.get("/api/sheet_options")
+async def sheet_options() -> dict:
+    """Expose every selectable sheet option so the UI has a single source of truth."""
+    return {
+        "styles": [
+            {"id": key, "label": value["label"]}
+            for key, value in STYLE_PRESETS.items()
+        ],
+        "resample_methods": RESAMPLE_LABELS,
+        "default_items": DEFAULT_ITEMS,
+        "gtceu_steel_items": GTCEU_STEEL_ITEMS,
+        "backgrounds": ["white", "transparent", "black", "magenta", "green"],
+        "background_modes": [
+            "auto", "white", "black", "magenta", "green",
+            "transparent", "none", "rembg",
+        ],
+        "cell_modes": ["item", "block"],
+        "grid_presets": [
+            {"label": "2 x 2 (4)", "rows": 2, "cols": 2},
+            {"label": "3 x 3 (9)", "rows": 3, "cols": 3},
+            {"label": "4 x 4 (16)", "rows": 4, "cols": 4},
+            {"label": "4 x 5 (20)", "rows": 4, "cols": 5},
+            {"label": "5 x 5 (25)", "rows": 5, "cols": 5},
+            {"label": "4 x 6 (24)", "rows": 4, "cols": 6},
+            {"label": "6 x 6 (36)", "rows": 6, "cols": 6},
+        ],
+    }
+
+
+@app.post("/api/build_sheet_prompt", response_model=BuildSheetPromptResponse)
+async def build_sheet_prompt_endpoint(
+    payload: BuildSheetPromptRequest,
+) -> BuildSheetPromptResponse:
+    """Preview the exact prompt that will be sent. No AI call, no cost."""
+    items = _normalize_items(payload.items, payload.grid_rows, payload.grid_cols)
+    guidance = (
+        build_reference_guidance(
+            payload.reference_strength, payload.reference_instructions
+        )
+        if payload.has_reference
+        else ""
+    )
+    prompt = build_sheet_prompt(
+        items=items,
+        grid_rows=payload.grid_rows,
+        grid_cols=payload.grid_cols,
+        style=payload.style,
+        background=payload.background,
+        extra_instructions=payload.extra_instructions,
+        custom_prompt=payload.custom_prompt,
+        reference_guidance=guidance,
+    )
+    return BuildSheetPromptResponse(
+        prompt=prompt,
+        items=items,
+        grid_rows=payload.grid_rows,
+        grid_cols=payload.grid_cols,
+        has_reference=payload.has_reference,
+    )
+
+
+@app.post("/api/generate_sheet", response_model=SheetGenerateResponse)
+async def generate_sheet(payload: SheetGenerateRequest) -> SheetGenerateResponse:
+    """Render a full atlas with ONE AI call, then split + process every cell."""
+    items = _normalize_items(payload.items, payload.grid_rows, payload.grid_cols)
+    ref_pil = _decode_reference_image(payload.reference_image_b64)
+    has_reference = ref_pil is not None
+
+    guidance = (
+        build_reference_guidance(
+            payload.reference_strength, payload.reference_instructions
+        )
+        if has_reference
+        else ""
+    )
+    prompt = build_sheet_prompt(
+        items=items,
+        grid_rows=payload.grid_rows,
+        grid_cols=payload.grid_cols,
+        style=payload.style,
+        background=payload.background,
+        extra_instructions=payload.extra_instructions,
+        custom_prompt=payload.custom_prompt,
+        reference_guidance=guidance,
+    )
+    params = payload.process.model_copy(
+        update={"grid_rows": payload.grid_rows, "grid_cols": payload.grid_cols}
+    )
+
+    try:
+        active_provider = get_provider(payload.provider)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    if has_reference and not active_provider.supports_img2img:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Provider '{active_provider.name}' does not support reference "
+                "images (img2img). Remove the reference image or switch provider."
+            ),
+        )
+
+    try:
+        raw_image = await active_provider.generate(
+            wrapped_prompt=prompt,
+            mode=TextureMode.ITEM,
+            reference_image=ref_pil,
+            strength=payload.reference_strength,
+        )
+        result = process_sheet(
+            raw_image, params, items, overrides=payload.cell_overrides
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        err_msg = str(exc).strip()
+        if hasattr(exc, "response") and getattr(exc, "response", None) is not None:
+            resp_obj = getattr(exc, "response")
+            try:
+                err_msg = f"HTTP {resp_obj.status_code}: {resp_obj.text[:400]}"
+            except Exception:
+                pass
+        logger.error(
+            "Sheet generation failed with provider %s (%s): %s",
+            active_provider.provider_id,
+            exc.__class__.__name__,
+            err_msg,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Provider '{active_provider.name}' error: {err_msg}"
+                if err_msg
+                else f"Failed to generate atlas from '{active_provider.name}'."
+            ),
+        ) from exc
+
+    return SheetGenerateResponse(
+        **result.model_dump(),
+        wrapped_prompt=prompt,
+        provider=active_provider.provider_id,
+        used_reference=has_reference,
+    )
+
+
+@app.post("/api/process_sheet", response_model=SheetProcessResponse)
+async def process_sheet_endpoint(
+    payload: SheetProcessRequest,
+) -> SheetProcessResponse:
+    """Re-split / re-process an existing atlas. NEVER calls the AI model.
+
+    This is the real-time knob endpoint: once the atlas exists, the client can
+    change size / resampling / palette / background / grid detection freely.
+    """
+    try:
+        raw_image = base64_to_image(payload.raw_sheet_b64)
+        return process_sheet(
+            raw_image,
+            payload.process,
+            payload.items or list(DEFAULT_ITEMS),
+            overrides=payload.cell_overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        logger.error("Sheet processing failed: %s", exc.__class__.__name__)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not process the provided atlas: {exc}",
+        ) from exc
+
+
+@app.post("/api/export_sheet_zip")
+async def export_sheet_zip(payload: SheetZipRequest) -> Response:
+    """Package the processed cells as a resource-pack-ready ZIP of PNGs."""
+    try:
+        raw_image = base64_to_image(payload.raw_sheet_b64)
+        result = process_sheet(
+            raw_image,
+            payload.process,
+            payload.items or list(DEFAULT_ITEMS),
+            overrides=payload.cell_overrides,
+        )
+        zip_bytes = build_sheet_zip(result)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not build the sheet archive: {exc}",
+        ) from exc
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="mc_sprite_sheet.zip"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 

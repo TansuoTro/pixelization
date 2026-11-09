@@ -17,12 +17,16 @@ backend/.u2net/
 
 # Node / Frontend
 node_modules/
+dist/
+.netlify/
 frontend/dist/
 frontend/dist-ssr/
+.selftest.mjs
 *.local
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.tsbuildinfo
 
 # IDEs & OS
 .vscode/

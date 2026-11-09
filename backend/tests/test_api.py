@@ -27,8 +27,8 @@ def test_list_providers_returns_all_supported_backends() -> None:
     resp = client.get("/api/providers")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["default_provider"] == "mock"
     ids = {p["id"] for p in body["providers"]}
+    assert body["default_provider"] in ids
     assert ids == {
         "upload_only",
         "pollinations",

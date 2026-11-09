@@ -1,0 +1,29 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Same-origin reverse proxies. These are plain edge rewrites (no serverless
+# function), so the deployed site is still 100% static / browser-only. They
+# exist solely to avoid browser CORS restrictions when calling provider APIs.
+# The browser still sends its own Authorization header, so keys never touch
+# Netlify's build or logs beyond being relayed to the provider.
+[[redirects]]
+  from = "/proxy/ark/*"
+  to = "https://ark.cn-beijing.volces.com/api/v3/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/proxy/openai/*"
+  to = "https://api.openai.com/v1/:splat"
+  status = 200
+  force = true
+
+# SPA fallback (must come last).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

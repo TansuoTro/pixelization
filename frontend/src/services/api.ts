@@ -1,14 +1,21 @@
 import {
+  BuildSheetPromptRequest,
+  BuildSheetPromptResponse,
   GenerateResponse,
   GenerateTextureParams,
   ProvidersResponse,
   ReprocessParams,
+  SheetGenerateRequest,
+  SheetGenerateResponse,
+  SheetOptions,
+  SheetProcessRequest,
+  SheetProcessResponse,
 } from "../types/texture";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 const FALLBACK_PROVIDERS: ProvidersResponse = {
-  default_provider: "mock",
+  default_provider: "openai",
   providers: [
     {
       id: "upload_only",
@@ -35,15 +42,16 @@ const FALLBACK_PROVIDERS: ProvidersResponse = {
         "Deterministic procedural sprite & seamless texture generator for instant testing.",
       configured: true,
       supports_img2img: true,
-      is_default: true,
+      is_default: false,
     },
     {
       id: "openai",
-      name: "OpenAI (gpt-image-1 / DALL-E)",
-      description: "Cloud inference via OpenAI Images API (OPENAI_API_KEY).",
+      name: "OpenAI GPT Image 2",
+      description:
+        "OpenAI GPT Image 2 via the Images API (OPENAI_API_KEY / OPENAI_BASE_URL).",
       configured: false,
       supports_img2img: true,
-      is_default: false,
+      is_default: true,
     },
     {
       id: "gemini",
@@ -159,5 +167,91 @@ export async function reprocessTexture(
   }
 
   return (await response.json()) as GenerateResponse;
+}
+
+// --------------------------------------------------------------------------- //
+// Sprite-sheet / atlas batch studio
+// --------------------------------------------------------------------------- //
+
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const errJson = (await response.json()) as { detail?: string };
+    if (errJson.detail) return errJson.detail;
+  } catch {
+    // Ignore JSON parse error
+  }
+  return `${fallback} (${response.status})`;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
+
+export async function fetchSheetOptions(): Promise<SheetOptions> {
+  const response = await fetch(`${API_BASE}/api/sheet_options`, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(await readError(response, "Options failed"));
+  return (await response.json()) as SheetOptions;
+}
+
+export async function buildSheetPrompt(
+  params: BuildSheetPromptRequest
+): Promise<BuildSheetPromptResponse> {
+  const response = await fetch(`${API_BASE}/api/build_sheet_prompt`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new Error(await readError(response, "Prompt build failed"));
+  return (await response.json()) as BuildSheetPromptResponse;
+}
+
+export async function generateSheet(
+  params: SheetGenerateRequest
+): Promise<SheetGenerateResponse> {
+  const response = await fetch(`${API_BASE}/api/generate_sheet`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new Error(await readError(response, "Atlas generation failed"));
+  return (await response.json()) as SheetGenerateResponse;
+}
+
+export async function processSheet(
+  params: SheetProcessRequest
+): Promise<SheetProcessResponse> {
+  const response = await fetch(`${API_BASE}/api/process_sheet`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new Error(await readError(response, "Atlas processing failed"));
+  return (await response.json()) as SheetProcessResponse;
+}
+
+export async function exportSheetZip(
+  params: SheetProcessRequest
+): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/api/export_sheet_zip`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new Error(await readError(response, "ZIP export failed"));
+  return await response.blob();
+}
+
+export function pngDataUrl(b64: string): string {
+  return `data:image/png;base64,${b64}`;
+}
+
+export function downloadDataUrl(dataUrl: string, filename: string): void {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
