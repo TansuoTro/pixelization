@@ -309,6 +309,44 @@ function buildContactSheet(rasters: Raster[], cells: SheetCell[], p: ProcessPara
   return canvas.toDataURL("image/png").split(",")[1] ?? "";
 }
 
+export interface SingleResult {
+  rawB64: string;
+  processedB64: string;
+  palette: string[];
+  width: number;
+  height: number;
+  empty: boolean;
+  contentRatio: number;
+  bbox: number[];
+  filename: string;
+}
+
+/**
+ * Single-texture pipeline: process the WHOLE image as one sprite (no grid
+ * splitting). Reuses the same background keying + resample + quantize engine as
+ * processCell.
+ */
+export async function processSingleImage(
+  rawB64: string,
+  params: ProcessParams,
+  name = "texture"
+): Promise<SingleResult> {
+  const sheet = await decodeToRaster(rawB64);
+  const bg = buildBackgroundMask(sheet, params);
+  const outcome = processCell(sheet, bg.mask, params, bg.color);
+  return {
+    rawB64,
+    processedB64: rasterToPngB64(outcome.raster),
+    palette: outcome.palette,
+    width: sheet.w,
+    height: sheet.h,
+    empty: outcome.empty,
+    contentRatio: outcome.contentRatio,
+    bbox: outcome.bbox,
+    filename: `${slugify(name)}.png`,
+  };
+}
+
 export function buildSheetZip(result: SheetResult): Uint8Array {
   const files: Record<string, Uint8Array> = {};
   for (const cell of result.cells) {

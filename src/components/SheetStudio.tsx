@@ -16,7 +16,6 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
-  Upload,
   X,
 } from "lucide-react";
 import type {
@@ -52,15 +51,18 @@ import {
   PostProcessControls,
   resetParams,
   SelectField,
-  SliderField,
   Toggle,
 } from "./ui";
 import { PixelEditor } from "./PixelEditor";
+import { ReferenceUpload } from "./ReferenceUpload";
+import { SingleStudio } from "./SingleStudio";
 
 interface Props {
   settings: Settings;
   onOpenSettings: () => void;
 }
+
+export type StudioMode = "atlas" | "single";
 
 const message = (err: unknown): string =>
   err instanceof Error ? err.message : "发生未知错误";
@@ -108,6 +110,7 @@ const GridOverlay: React.FC<{
 };
 
 export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
+  const [mode, setMode] = useState<StudioMode>("atlas");
   const [itemsText, setItemsText] = useState(DEFAULT_ITEMS.join("\n"));
   const [gridRows, setGridRows] = useState(4);
   const [gridCols, setGridCols] = useState(4);
@@ -123,7 +126,6 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const [referenceStrength, setReferenceStrength] = useState(0.75);
   const [referenceInstructions, setReferenceInstructions] = useState("");
-  const [isDraggingReference, setIsDraggingReference] = useState(false);
 
   const [rawSheetB64, setRawSheetB64] = useState<string | null>(null);
   const [result, setResult] = useState<SheetResult | null>(null);
@@ -137,7 +139,6 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
   const [showPrompt, setShowPrompt] = useState(false);
   const [selectedCell, setSelectedCell] = useState<number | null>(null);
 
-  const referenceInputRef = useRef<HTMLInputElement | null>(null);
   const atlasInputRef = useRef<HTMLInputElement | null>(null);
   const requestSeq = useRef(0);
 
@@ -163,58 +164,6 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
   );
 
   const promptPreview = useMemo(() => buildSheetPrompt(promptPayload), [promptPayload]);
-
-  // ---------- local reference image (upload / drop / paste) ----------
-  const acceptReference = useCallback(
-    async (file: File) => {
-      if (!file.type.startsWith("image/")) {
-        setError("参考图必须是图片文件。");
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        setError("参考图过大（上限 5 MB）。");
-        return;
-      }
-      try {
-        const b64 = await fileToBase64(file);
-        setReferenceB64(b64);
-        setReferenceName(file.name);
-        setError(null);
-        setNotice("已附加参考图，生成时会走图生图通道。");
-      } catch (err) {
-        setError(message(err));
-      }
-    },
-    []
-  );
-
-  const clearReference = useCallback(() => {
-    setReferenceB64(null);
-    setReferenceName(null);
-    if (referenceInputRef.current) referenceInputRef.current.value = "";
-  }, []);
-
-  useEffect(() => {
-    const onPaste = (e: ClipboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
-      const list = e.clipboardData?.items;
-      if (!list) return;
-      for (let i = 0; i < list.length; i += 1) {
-        const item = list[i];
-        if (item.type.startsWith("image/")) {
-          const blob = item.getAsFile();
-          if (blob) {
-            e.preventDefault();
-            void acceptReference(new File([blob], `pasted_reference.${item.type.split("/")[1] || "png"}`, { type: item.type }));
-            return;
-          }
-        }
-      }
-    };
-    window.addEventListener("paste", onPaste);
-    return () => window.removeEventListener("paste", onPaste);
-  }, [acceptReference]);
 
   // ---------- real-time local reprocessing (NO API call) ----------
   useEffect(() => {
@@ -354,8 +303,41 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
 
   const ready = isConfigured(settings);
 
+  const renderModeTabs = () => (
+    <div className="mb-6 flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/80 p-1.5">
+      {([
+        { id: "atlas", label: "图集模式（多格切分）" },
+        { id: "single", label: "单图贴图模式（不切分）" },
+      ] as { id: StudioMode; label: string }[]).map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => setMode(tab.id)}
+          className={`flex-1 rounded-lg px-4 py-2 text-xs font-medium transition ${
+            mode === tab.id
+              ? "bg-emerald-500 text-slate-950"
+              : "text-slate-400 hover:text-slate-100"
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === "single") {
+    return (
+      <>
+        {renderModeTabs()}
+        <SingleStudio settings={settings} onOpenSettings={onOpenSettings} />
+      </>
+    );
+  }
+
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+    <>
+      {renderModeTabs()}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
       {/* LEFT --------------------------------------------------------------- */}
       <div className="space-y-6 lg:col-span-4">
         <Card
@@ -458,62 +440,16 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
             )}
 
             {/* Reference image */}
-            <div className="space-y-2.5 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                  <ImagePlus className="h-3.5 w-3.5 text-emerald-400" /> 参考图（可选）
-                </span>
-                {referenceB64 && (
-                  <button type="button" onClick={clearReference} className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-rose-300">
-                    <X className="h-3 w-3" /> 清除
-                  </button>
-                )}
-              </div>
-              <input
-                ref={referenceInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/bmp,image/gif"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void acceptReference(f);
-                  e.target.value = "";
-                }}
-              />
-              {referenceB64 ? (
-                <div className="flex items-center gap-3">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-700" style={CHECKER_STYLE}>
-                    <img src={b64DataUrl(referenceB64)} alt="参考图" className="h-full w-full object-contain" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[11px] text-slate-200">{referenceName}</p>
-                    <p className="font-mono text-[10px] text-emerald-300">已附加 · 图生图通道</p>
-                    <button type="button" onClick={() => referenceInputRef.current?.click()} className="mt-1 text-[10px] text-slate-400 underline hover:text-slate-200">替换</button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => referenceInputRef.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); setIsDraggingReference(true); }}
-                  onDragLeave={() => setIsDraggingReference(false)}
-                  onDrop={(e) => { e.preventDefault(); setIsDraggingReference(false); const f = e.dataTransfer.files?.[0]; if (f) void acceptReference(f); }}
-                  className={`flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-xs transition ${
-                    isDraggingReference ? "border-emerald-500 bg-emerald-500/5 text-emerald-300" : "border-slate-700 text-slate-400 hover:border-emerald-500/60 hover:text-slate-200"
-                  }`}
-                >
-                  <Upload className="h-3.5 w-3.5" /> 上传 / 拖放 / Ctrl+V 粘贴参考图
-                </button>
-              )}
-              {referenceB64 && (
-                <div className="space-y-2.5 border-t border-slate-800 pt-2.5">
-                  <SliderField label="参考图影响强度" value={referenceStrength} min={0.05} max={1} step={0.05} onChange={setReferenceStrength} format={(v) => (v >= 0.75 ? `HIGH (${v.toFixed(2)})` : v >= 0.4 ? `MEDIUM (${v.toFixed(2)})` : `LOW (${v.toFixed(2)})`)} />
-                  <Field label="参考图补充说明（可选）">
-                    <textarea rows={2} value={referenceInstructions} onChange={(e) => setReferenceInstructions(e.target.value)} placeholder="例如：沿用铜的氧化色调与光照…" className={`${INPUT_CLS} text-xs`} />
-                  </Field>
-                </div>
-              )}
-            </div>
+            <ReferenceUpload
+              b64={referenceB64}
+              name={referenceName}
+              onB64={setReferenceB64}
+              onName={setReferenceName}
+              strength={referenceStrength}
+              onStrength={setReferenceStrength}
+              instructions={referenceInstructions}
+              onInstructions={setReferenceInstructions}
+            />
 
             {/* Prompt preview */}
             <div className="rounded-xl border border-slate-800 bg-slate-950/60">
@@ -770,6 +706,7 @@ export const SheetStudio: React.FC<Props> = ({ settings, onOpenSettings }) => {
         )}
       </div>
     </div>
+  </>
   );
 };
 

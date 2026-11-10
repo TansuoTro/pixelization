@@ -29,7 +29,7 @@ const App: React.FC = () => {
             </div>
             <div>
               <h1 className="text-base font-bold tracking-tight text-slate-100 sm:text-lg">Minecraft Sprite Sheet Studio</h1>
-              <p className="text-xs text-slate-400">纯浏览器 · 图集生成 / 网格切分 / 逐格后处理 · 16/32/64</p>
+              <p className="text-xs text-slate-400">纯浏览器 · 图集切分 / 单图贴图 · 去背与逐格后处理 · 16/32/64</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

@@ -254,3 +254,65 @@ export function buildSheetPrompt(o: BuildPromptOptions): string {
   // Fixed base rules are always appended, even for a custom override.
   return `${body}\n\n${IMPORTANT_RULES}`;
 }
+
+/**
+ * Single-texture prompt: identical art-style engine to the atlas prompt but for
+ * ONE sprite (no grid, no cell assignment). Reuses the same style presets,
+ * background blocks and reference guidance.
+ */
+const IMPORTANT_RULES_SINGLE = `IMPORTANT:
+- This image contains EXACTLY ONE sprite / texture. Do NOT draw a grid, a sheet or multiple objects.
+- Keep a consistent visual language, art style, scale and palette.
+- Do NOT draw any text, letters, numbers, labels, captions or watermarks.
+- Do NOT add a logo, signature, border frame, drop shadow or decorations.
+- Do NOT add a checkerboard, gradient or coloured background behind the sprite.
+- The result must look like a professional Minecraft Java Edition mod resource pack asset.`;
+
+export interface BuildSinglePromptOptions {
+  description: string;
+  style: SheetStyle;
+  background: SheetBackground;
+  extraInstructions: string;
+  customPrompt?: string;
+  hasReference?: boolean;
+  referenceStrength?: number;
+  referenceInstructions?: string;
+}
+
+export function buildSinglePrompt(o: BuildSinglePromptOptions): string {
+  const preset = STYLE_PRESETS[o.style] ?? STYLE_PRESETS.custom;
+  let body: string;
+
+  if (o.customPrompt && o.customPrompt.trim()) {
+    body = o.customPrompt.trim();
+  } else {
+    const desc = o.description.trim() || "a single Minecraft sprite icon";
+    const parts = [
+      preset.header,
+      "",
+      "SUBJECT (exactly ONE texture, no grid, no sheet):",
+      desc,
+      "",
+      "ART STYLE:",
+      preset.artStyle,
+      "",
+      preset.materialLanguage,
+      "",
+      "LIGHTING:",
+      preset.lighting,
+      "",
+      `CELL CONTENT: ${preset.cellNote}.`,
+      "",
+      BACKGROUND_BLOCKS[o.background] ?? BACKGROUND_BLOCKS.white,
+    ];
+    if (o.extraInstructions.trim()) {
+      parts.push("", "ADDITIONAL INSTRUCTIONS:", o.extraInstructions.trim());
+    }
+    body = parts.join("\n");
+  }
+
+  if (o.hasReference) {
+    body += `\n\n${buildReferenceGuidance(o.referenceStrength ?? 0.75, o.referenceInstructions ?? "")}`;
+  }
+  return `${body}\n\n${IMPORTANT_RULES_SINGLE}`;
+}
